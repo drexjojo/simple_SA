@@ -1,0 +1,9 @@
+DATA_FILE = "../sentiment-annotated-data.json"
+MAX_SEQ_LENGTH = 25
+PAD = 0
+PAD_WORD = '<pad>'
+BATCH_SIZE = 156
+EPOCH = 200
+HIDDEN_SIZE = 200
+OUTPUT_SIZE = 1
+LSTM_DROPOUT = 0.1
