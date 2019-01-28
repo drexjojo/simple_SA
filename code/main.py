@@ -11,7 +11,6 @@ from torch.utils.data import Dataset, DataLoader
 from constants import *
 from model import *
 
-
 class Model_Data:
 	def __init__(self, name):
 		self.name = name
@@ -73,12 +72,25 @@ def print_model_details(model_data):
 	print(model_data.valid_targets[0])
 
 def get_performance(rounded_preds,targets):
+	tp = 0
+	fp = 0
+	tn = 0
+	fn = 0
 	count = 0
 	for i,pred in enumerate(rounded_preds):
 		if pred == targets[i] :
 			count += 1
+		if int(pred) == 1 and int(targets[i]) == 1:
+			tp += 1
+		elif int(pred) == 1 and int(targets[i]) == 0:
+			fp += 1
+		elif int(pred) == 0 and int(targets[i]) == 1:
+			fn += 1
+		elif int(pred) == 0 and int(targets[i]) == 0:
+			tn += 1
+
 	acc = float(count)/float(BATCH_SIZE)
-	return acc*100
+	return acc*100,tp,fp,tn,fn
 
 def train_epoch(model, training_data, optimizer, criterion, device):
 	model.train()
@@ -92,7 +104,7 @@ def train_epoch(model, training_data, optimizer, criterion, device):
 		pred = model(sequences).squeeze(1)
 		rounded_preds = torch.round(torch.sigmoid(pred))
 		loss = criterion(pred,targets)
-		acc = get_performance(rounded_preds, targets)
+		acc,tp,fp,tn,fn = get_performance(rounded_preds, targets)
 		loss.backward()
 		optimizer.step()
 		epoch_loss += loss.item()
@@ -104,6 +116,10 @@ def eval_epoch(model, valid_data, optimizer, criterion, device):
 	model.eval()
 	epoch_loss = 0
 	epoch_acc = 0
+	f_tp = 0
+	f_fp = 0
+	f_tn = 0
+	f_fn = 0
 
 	with torch.no_grad():
 		for batch in tqdm(valid_data, mininterval=2,desc='  - (Validating)   ', leave=False):
@@ -111,11 +127,30 @@ def eval_epoch(model, valid_data, optimizer, criterion, device):
 			pred = model(sequences).squeeze(1)
 			rounded_preds = torch.round(torch.sigmoid(pred))
 			loss = criterion(pred,targets)
-			acc = get_performance(rounded_preds, targets)
+			acc,tp,fp,tn,fn = get_performance(rounded_preds, targets)
+			f_tp += tp
+			f_fp += fp
+			f_tn += tn
+			f_fn += fn
 			epoch_loss += loss.item()
 			epoch_acc += acc
 
-	return epoch_loss / len(valid_data), epoch_acc / len(valid_data)
+	try:
+		precision = tp/(tp+fp)
+	except ZeroDivisionError as e:
+		precision = 0
+	
+	try:
+		recall = tp/(tp+fn)
+	except ZeroDivisionError as e:
+		recall = 0
+
+	try:
+		f1 = 2*precision*recall/(precision+recall)
+	except ZeroDivisionError as e:
+		f1 = 0
+
+	return epoch_loss / len(valid_data), epoch_acc / len(valid_data), precision,recall,f1
 
 def train(model,training_data, validation_data, optimizer ,device):
 
@@ -126,13 +161,13 @@ def train(model,training_data, validation_data, optimizer ,device):
 
 		start = time.time()
 		train_loss, train_accu = train_epoch(model, training_data, optimizer, criterion,device)
-		print('  - (Training)   Loss: {ppl: 8.5f} <-> Accuracy: {accu:3.3f} % <-> '\
+		print('  - (Training)     Loss: {ppl: 8.5f} <-> Accuracy: {accu:3.3f} % <-> '\
 		'Time Taken : {elapse:3.3f} min'.format(
 		ppl=train_loss, accu=train_accu,
 		elapse=(time.time()-start)/60))
 
 		start = time.time()
-		valid_loss, valid_accu = eval_epoch(model, validation_data, optimizer, criterion,device)
+		valid_loss, valid_accu, precision,recall,f1 = eval_epoch(model, validation_data, optimizer, criterion,device)
 		print('  - (Validating)   Loss: {ppl: 8.5f} <-> Accuracy: {accu:3.3f} % <-> '\
 		'Time Taken : {elapse:3.3f} min'.format(
 		ppl=valid_loss, accu=valid_accu,
@@ -141,7 +176,13 @@ def train(model,training_data, validation_data, optimizer ,device):
 		if valid_accu >= max_valid_acc:
 			max_valid_acc = valid_accu
 			model_state_dict = model.state_dict()
-			checkpoint = {'model': model_state_dict,'epoch': epoch_i,'acc':valid_accu,'loss':valid_loss}
+			checkpoint = {'model': model_state_dict,
+							'epoch': epoch_i,
+							'acc':valid_accu,
+							'loss':valid_loss,
+							'precision':precision,
+							'recall':recall,
+							'f1':f1 }
 			model_name = '../models/best_model.chkpt'
 			torch.save(checkpoint, model_name)
 			print('[INFO] -> The checkpoint file has been updated.')
@@ -163,7 +204,7 @@ def main():
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 	print("[INFO] -> Using Device : ",device)
 
-	model = LSTM(vocab_size=model_data.n_words,glove=model_data.embeddings,word2index=model_data.word2index).to(device)
+	model = stacked_LSTM(vocab_size=model_data.n_words,glove=model_data.embeddings,word2index=model_data.word2index).to(device)
 
 	optimizer = optim.Adam(model.parameters())
 	train(model, train_loader, valid_loader, optimizer, device)
@@ -173,7 +214,9 @@ def main():
 	best_model = torch.load("../models/best_model.chkpt")
 	print("  -[EPOCH]     : ",best_model["epoch"])
 	print("  -[ACCURACY]  : ",best_model["acc"])
-	print("  -[LOSS]  : ",best_model["loss"])
+	print("  -[PRECISION]  : ",best_model["precision"])
+	print("  -[RECALL]  : ",best_model["recall"])
+	print("  -[f1]  : ",best_model["f1"])
 
 if __name__ == '__main__':
 	main()
